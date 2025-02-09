@@ -1,13 +1,19 @@
 "use client";
 import { useState, useEffect } from "react";
-import { saveJournalEntry, getJournalEntries, deleteJournalEntry } from "../utils/storage";
+import { saveJournalEntry, getJournalEntries, deleteJournalEntry, getJournalCount } from "../utils/storage";
+import { getUserXP, getUserLevel, addXP, awardXPForQuote } from "../utils/xp";
+import { getUnlockedAwards, checkAndUnlockAwards } from "../utils/awards";
+import { resetUserProgress } from "../utils/reset";
 
 export default function Home() {
   const [quote, setQuote] = useState("Loading...");
   const [journal, setJournal] = useState("");
   const [entries, setEntries] = useState([]);
+  const [xp, setXP] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [journalCount, setJournalCount] = useState(0);
+  const [awards, setAwards] = useState([]);
 
-  // Hardcoded backup quotes (if API fails)
   const fallbackQuotes = [
     "You have power over your mind – not outside events. Realize this, and you will find strength. - Marcus Aurelius",
     "We suffer more in imagination than in reality. - Seneca",
@@ -18,8 +24,15 @@ export default function Home() {
     "Luck is what happens when preparation meets opportunity. - Seneca",
   ];
 
-  // Fetch a Stoic quote on page load
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      setEntries(getJournalEntries());
+      setXP(getUserXP());
+      setLevel(getUserLevel());
+      setJournalCount(getJournalCount());
+      setAwards(getUnlockedAwards());
+    }
+
     console.log("Fetching new quote...");
 
     fetch("https://stoic-quotes.com/api/quote")
@@ -31,7 +44,6 @@ export default function Home() {
       })
       .then((data) => {
         console.log("API Response:", data);
-        // Ensure API response contains valid data
         if (data.text && data.author) {
           setQuote(`${data.text} - ${data.author}`);
         } else {
@@ -40,29 +52,51 @@ export default function Home() {
       })
       .catch((error) => {
         console.error("Error fetching quote:", error);
-        // Fallback to a hardcoded quote if API fails
         const backupQuote =
           fallbackQuotes[Math.floor(Math.random() * fallbackQuotes.length)];
         setQuote(backupQuote);
       });
-
-    // Load existing journal entries from LocalStorage
-    setEntries(getJournalEntries());
   }, []);
 
-  // Save journal entry
   const handleSave = () => {
     if (journal.trim()) {
-      saveJournalEntry(journal);
-      setEntries(getJournalEntries()); // Refresh entries
-      setJournal(""); // Clear input
+      saveJournalEntry(journal, quote);
+      setEntries(getJournalEntries());
+      setJournal("");
+      setJournalCount(getJournalCount());
+
+      addXP(10); // Award 10 XP for journaling
+      setXP(getUserXP());
+      setLevel(getUserLevel());
+
+      let newAwards = checkAndUnlockAwards(getJournalCount());
+      if (newAwards.length > 0) {
+        setAwards(getUnlockedAwards());
+      }
     }
   };
 
-  // Delete a journal entry
   const handleDelete = (id) => {
     deleteJournalEntry(id);
-    setEntries(getJournalEntries()); // Refresh entries
+    setEntries(getJournalEntries());
+    setJournalCount(getJournalCount());
+  };
+
+  const handleAcknowledgeQuote = () => {
+    awardXPForQuote(quote, 5); // Prevents multiple XP claims for the same quote
+    setXP(getUserXP());
+    setLevel(getUserLevel());
+  };
+
+  const handleReset = () => {
+    if (confirm("Are you sure you want to reset your progress? This cannot be undone.")) {
+      resetUserProgress();
+      setEntries([]);
+      setXP(0);
+      setLevel(1);
+      setJournalCount(0);
+      setAwards([]);
+    }
   };
 
   return (
@@ -70,6 +104,19 @@ export default function Home() {
       {/* Stoic Quote Section */}
       <h1 className="text-3xl font-bold mb-4">Stoic Quote</h1>
       <p className="text-lg italic max-w-lg bg-white p-4 rounded shadow-md">{quote}</p>
+
+      <button
+        className="mt-2 px-4 py-2 bg-green-500 text-white rounded"
+        onClick={handleAcknowledgeQuote}
+      >
+        ✅ I Read This Quote (+5 XP)
+      </button>
+
+      {/* XP & Level Display */}
+      <div className="mt-4">
+        <p className="text-lg font-semibold">🏆 Stoic Level: {level}</p>
+        <p className="text-md">XP: {xp}</p>
+      </div>
 
       {/* Journal Input */}
       <textarea
@@ -79,32 +126,48 @@ export default function Home() {
         value={journal}
         onChange={(e) => setJournal(e.target.value)}
       />
-      <button
-        className="mt-2 px-4 py-2 bg-blue-500 text-white rounded"
-        onClick={handleSave}
-      >
-        Save Entry
+      <button className="mt-2 px-4 py-2 bg-blue-500 text-white rounded" onClick={handleSave}>
+        Save Entry (+10 XP)
       </button>
 
       {/* Display Journal Entries */}
       <div className="mt-6 w-full max-w-lg">
-        <h2 className="text-xl font-semibold mb-2">Previous Entries</h2>
+        <h2 className="text-xl font-semibold mb-2">Your Reflections ({journalCount})</h2>
         {entries.length === 0 ? (
           <p className="text-gray-500">No journal entries yet.</p>
         ) : (
           entries.map((entry) => (
-            <div key={entry.id} className="bg-white p-3 rounded shadow mb-2 flex justify-between items-center">
-              <span>{entry.text}</span>
-              <button
-                className="text-red-500 text-sm"
-                onClick={() => handleDelete(entry.id)}
-              >
+            <div key={entry.id} className="bg-white p-3 rounded shadow mb-2">
+              <p className="text-gray-700 italic">"{entry.quote}"</p>
+              <p className="text-black mt-2">{entry.text}</p>
+              <p className="text-sm text-gray-500 mt-1">{entry.date}</p>
+              <button className="mt-2 text-red-500 text-sm" onClick={() => handleDelete(entry.id)}>
                 ✖ Delete
               </button>
             </div>
           ))
         )}
       </div>
+
+      {/* Achievements Section */}
+      <div className="mt-6 w-full max-w-lg">
+        <h2 className="text-xl font-semibold mb-2">🏆 Achievements</h2>
+        {awards.length === 0 ? (
+          <p className="text-gray-500">No achievements yet.</p>
+        ) : (
+          awards.map((award, index) => (
+            <div key={index} className="bg-yellow-200 p-3 rounded shadow mb-2">
+              <h3 className="font-bold">{award.title}</h3>
+              <p className="text-sm">{award.description}</p>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Reset Button */}
+      <button className="mt-6 px-4 py-2 bg-red-500 text-white rounded" onClick={handleReset}>
+        🔄 Reset My Journey
+      </button>
     </div>
   );
 }
