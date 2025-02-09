@@ -1,16 +1,20 @@
 "use client";
 import { useState, useEffect } from "react";
 import { saveJournalEntry, getJournalEntries, deleteJournalEntry, getJournalCount } from "../utils/storage";
-import { getUserXP, getUserLevel, addXP, awardXPForQuote } from "../utils/xp";
+import { getUserXP, getUserLevel, getXPProgress, getNextLevelXP, addXP, awardXPForQuote } from "../utils/xp";
 import { getUnlockedAwards, checkAndUnlockAwards } from "../utils/awards";
 import { resetUserProgress } from "../utils/reset";
 
 export default function Home() {
+  const [isClient, setIsClient] = useState(false);
   const [quote, setQuote] = useState("Loading...");
   const [journal, setJournal] = useState("");
   const [entries, setEntries] = useState([]);
   const [xp, setXP] = useState(0);
   const [level, setLevel] = useState(1);
+  const [xpProgress, setXPProgress] = useState(0);
+  const [nextLevelXP, setNextLevelXP] = useState(100); // Tracks XP needed for next level
+  const [xpGained, setXPGained] = useState(0);
   const [journalCount, setJournalCount] = useState(0);
   const [awards, setAwards] = useState([]);
 
@@ -25,38 +29,51 @@ export default function Home() {
   ];
 
   useEffect(() => {
+    setIsClient(true);
+
     if (typeof window !== "undefined") {
       setEntries(getJournalEntries());
       setXP(getUserXP());
       setLevel(getUserLevel());
+      setXPProgress(getXPProgress());
+      setNextLevelXP(getNextLevelXP()); // Update next level XP
       setJournalCount(getJournalCount());
       setAwards(getUnlockedAwards());
     }
 
-    console.log("Fetching new quote...");
+    // Fetch the quote from the API
+    const fetchQuote = async () => {
+      try {
+        console.log("Fetching new quote...");
+        const response = await fetch("https://stoic-quotes.com/api/quote");
 
-    fetch("https://stoic-quotes.com/api/quote")
-      .then((response) => {
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status}`);
         }
-        return response.json();
-      })
-      .then((data) => {
+
+        const data = await response.json();
         console.log("API Response:", data);
+
         if (data.text && data.author) {
           setQuote(`${data.text} - ${data.author}`);
         } else {
           throw new Error("Invalid API response");
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         console.error("Error fetching quote:", error);
+        // Use a fallback quote if API fails
         const backupQuote =
           fallbackQuotes[Math.floor(Math.random() * fallbackQuotes.length)];
         setQuote(backupQuote);
-      });
+      }
+    };
+
+    fetchQuote();
   }, []);
+
+  if (!isClient) {
+    return <p>Loading...</p>;
+  }
 
   const handleSave = () => {
     if (journal.trim()) {
@@ -65,9 +82,11 @@ export default function Home() {
       setJournal("");
       setJournalCount(getJournalCount());
 
-      addXP(10); // Award 10 XP for journaling
+      addXP(10);
       setXP(getUserXP());
       setLevel(getUserLevel());
+      setXPProgress(getXPProgress());
+      setNextLevelXP(getNextLevelXP()); // Update next level XP progress
 
       let newAwards = checkAndUnlockAwards(getJournalCount());
       if (newAwards.length > 0) {
@@ -83,9 +102,14 @@ export default function Home() {
   };
 
   const handleAcknowledgeQuote = () => {
-    awardXPForQuote(quote, 5); // Prevents multiple XP claims for the same quote
+    awardXPForQuote(quote, 5);
     setXP(getUserXP());
     setLevel(getUserLevel());
+    setXPProgress(getXPProgress());
+    setNextLevelXP(getNextLevelXP()); // Update XP needed for next level
+    setXPGained(5);
+
+    setTimeout(() => setXPGained(0), 1500);
   };
 
   const handleReset = () => {
@@ -94,6 +118,8 @@ export default function Home() {
       setEntries([]);
       setXP(0);
       setLevel(1);
+      setXPProgress(0);
+      setNextLevelXP(100);
       setJournalCount(0);
       setAwards([]);
     }
@@ -105,17 +131,26 @@ export default function Home() {
       <h1 className="text-3xl font-bold mb-4">Stoic Quote</h1>
       <p className="text-lg italic max-w-lg bg-white p-4 rounded shadow-md">{quote}</p>
 
-      <button
-        className="mt-2 px-4 py-2 bg-green-500 text-white rounded"
-        onClick={handleAcknowledgeQuote}
-      >
+      <button className="mt-2 px-4 py-2 bg-green-500 text-white rounded" onClick={handleAcknowledgeQuote}>
         ✅ I Read This Quote (+5 XP)
       </button>
+
+      {/* XP Progress Bar */}
+      <div className="mt-4 w-full max-w-md bg-gray-300 rounded-full relative">
+        <div
+          className="bg-green-500 text-xs font-medium text-white text-center p-1 leading-none rounded-full transition-all duration-500"
+          style={{ width: `${xpProgress}%` }}
+        >
+          {xpProgress.toFixed(0)}%
+        </div>
+      </div>
+
+      {xpGained > 0 && <p className="text-green-500 text-lg font-bold animate-fade-in">+{xpGained} XP!</p>}
 
       {/* XP & Level Display */}
       <div className="mt-4">
         <p className="text-lg font-semibold">🏆 Stoic Level: {level}</p>
-        <p className="text-md">XP: {xp}</p>
+        <p className="text-md">XP: {xp}/{nextLevelXP}</p>
       </div>
 
       {/* Journal Input */}
@@ -144,21 +179,6 @@ export default function Home() {
               <button className="mt-2 text-red-500 text-sm" onClick={() => handleDelete(entry.id)}>
                 ✖ Delete
               </button>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Achievements Section */}
-      <div className="mt-6 w-full max-w-lg">
-        <h2 className="text-xl font-semibold mb-2">🏆 Achievements</h2>
-        {awards.length === 0 ? (
-          <p className="text-gray-500">No achievements yet.</p>
-        ) : (
-          awards.map((award, index) => (
-            <div key={index} className="bg-yellow-200 p-3 rounded shadow mb-2">
-              <h3 className="font-bold">{award.title}</h3>
-              <p className="text-sm">{award.description}</p>
             </div>
           ))
         )}
